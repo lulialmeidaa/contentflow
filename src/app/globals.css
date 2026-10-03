@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #151313;
+  --color-ink-soft: #3a3535;
+  --color-muted: #857b79;
+  --color-line: #ece5e3;
+  --color-paper: #ffffff;
+  --color-mist: #faf7f6;
+  --color-rose: #b9737a;
+  --color-rose-deep: #9c5a61;
+  --color-rose-soft: #f5e8e8;
+  --color-rose-wash: #fcf5f5;
+  --color-alert: #b4532a;
+  --color-alert-soft: #fbeee6;
+  --color-ok: #4f7a5e;
+  --color-ok-soft: #e9f2ec;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+
+  --radius-card: 1.125rem;
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: var(--color-mist);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-rose);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--color-rose-soft);
+  }
+}
+
+@utility card {
+  @apply rounded-[var(--radius-card)] border border-line bg-paper;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
+}
+@utility btn-primary {
+  @apply btn bg-ink text-paper hover:bg-ink-soft;
+}
+@utility btn-ghost {
+  @apply btn text-ink hover:bg-mist;
+}
+@utility btn-outline {
+  @apply btn border border-line bg-paper text-ink hover:border-ink/30;
+}
+@utility field {
+  @apply w-full rounded-xl border border-line bg-paper px-3.5 py-2.5 text-[15px] placeholder:text-muted/70 focus:border-rose focus:outline-none;
+}
+@utility label {
+  @apply mb-1.5 block text-xs font-medium tracking-wide text-muted uppercase;
+}
+@utility chip {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap;
+}
+@utility eyebrow {
+  @apply text-[11px] font-semibold tracking-[0.14em] text-muted uppercase;
+}
+
+dialog::backdrop {
+  background: rgb(21 19 19 / 0.35);
+  backdrop-filter: blur(2px);
+}
