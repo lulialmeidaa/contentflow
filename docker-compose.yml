@@ -1,0 +1,17 @@
+# Projeto isolado: não compartilha nada com os outros serviços da VPS.
+name: contentflow
+
+services:
+  contentflow:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
+    container_name: contentflow
+    env_file: .env
+    # Só acessível de dentro da VPS; o Cloudflare Tunnel publica o domínio.
+    ports:
+      - "127.0.0.1:${CONTENTFLOW_PORT:-3100}:3000"
+    restart: unless-stopped
+    mem_limit: 512m
