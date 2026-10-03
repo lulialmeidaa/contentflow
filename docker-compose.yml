@@ -1,13 +1,10 @@
 # Projeto isolado: não altera nenhum outro serviço da VPS.
+# A imagem é construída pelo GitHub Actions (.github/workflows/docker.yml).
 name: contentflow
 
 services:
   contentflow:
-    build:
-      context: .
-      args:
-        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
-        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
+    image: ghcr.io/lulialmeidaa/contentflow:latest
     container_name: contentflow
     env_file: .env
     # Acesso local para testes (curl na própria VPS).
@@ -24,4 +21,4 @@ services:
 networks:
   tunnel:
     external: true
-    name: ${TUNNEL_NETWORK:-financas_default}
+    name: ${TUNNEL_NETWORK:-financas_financas}
