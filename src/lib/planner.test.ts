@@ -33,6 +33,7 @@ function content(over: Partial<Content> = {}): Content {
     category: null,
     publication_date: null,
     recording_date: null,
+    recording_time: null,
     estimated_minutes: DEFAULT_MINUTES[format],
     created_at: `2026-09-01T00:00:${String(seq).padStart(2, "0")}Z`,
     updated_at: "",
@@ -266,5 +267,39 @@ describe("findConflict", () => {
 
   it("ignora o próprio compromisso ao editar", () => {
     expect(findConflict(gym, [gym])).toBeNull();
+  });
+});
+
+describe("horário fixado (arrastar no calendário)", () => {
+  it("coloca a gravação no horário escolhido e os demais ao redor", () => {
+    const fixed = content({ recording_date: SAT, recording_time: "10:00:00", estimated_minutes: 60 });
+    const others = [content(), content()]; // 45 min cada, vão para o sábado
+    const plan = buildPlan({ today: MON, contents: [fixed, ...others], events: [], windows: WINDOWS });
+    const sat = plan.days.find((d) => d.date === SAT)!;
+    expect(sat.items.map((i) => [i.content.id, i.start, i.fixedTime])).toEqual([
+      [others[0].id, 9 * 60, false],
+      [fixed.id, 10 * 60, true],
+      [others[1].id, 11 * 60, false],
+    ]);
+    expect(plan.alerts).toEqual([]);
+  });
+
+  it("aceita horário fora da janela de gravação", () => {
+    const night = content({ recording_date: MON, recording_time: "20:00", estimated_minutes: 30 });
+    const plan = buildPlan({ today: MON, contents: [night], events: [], windows: WINDOWS });
+    expect(plan.byContent.get(night.id)!.item).toMatchObject({ start: 20 * 60, end: 20 * 60 + 30 });
+  });
+
+  it("avisa quando o horário fixado bate com um compromisso", () => {
+    const c = content({ recording_date: MON, recording_time: "10:30", estimated_minutes: 45 });
+    const gym = event({ date: MON, start_time: "10:00", end_time: "11:00", title: "Academia" });
+    const plan = buildPlan({ today: MON, contents: [c], events: [gym], windows: WINDOWS });
+    expect(plan.alerts.map((a) => a.kind)).toEqual(["conflito"]);
+  });
+
+  it("ignora o horário quando a data não está fixada", () => {
+    const c = content({ recording_time: "10:00" });
+    const plan = buildPlan({ today: MON, contents: [c], events: [], windows: WINDOWS });
+    expect(plan.byContent.get(c.id)!.item.fixedTime).toBe(false);
   });
 });

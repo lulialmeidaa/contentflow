@@ -109,7 +109,7 @@ export function ContentList({
       {filtered.length ? (
         <div className="card divide-y divide-line">
           {filtered.map((c) => (
-            <ContentRow key={c.id} content={c} today={today} recordingDate={recording[c.id]} />
+            <ContentRow key={c.id} content={c} today={today} recordingDate={recording[c.id]} editRecording />
           ))}
         </div>
       ) : (

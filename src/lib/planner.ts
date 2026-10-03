@@ -129,6 +129,8 @@ export type PlannedItem = {
   late: boolean;
   /** Data fixada manualmente pela usuária. */
   pinned: boolean;
+  /** Horário também fixado (arrastado no calendário). */
+  fixedTime: boolean;
 };
 
 export type DayPlan = {
@@ -141,7 +143,7 @@ export type DayPlan = {
 };
 
 export type PlanAlert = {
-  kind: "atrasado" | "sem-horario" | "excede-janela";
+  kind: "atrasado" | "sem-horario" | "excede-janela" | "conflito";
   content: Content;
   message: string;
 };
@@ -187,6 +189,19 @@ function urgencyOrder(today: ISODate) {
 
 type Draft = { content: Content; late: boolean; pinned: boolean };
 
+/** Remove um intervalo das janelas livres. */
+function subtract(slots: Slot[], cut: Slot): Slot[] {
+  return slots.flatMap((s) => {
+    if (cut.end <= s.start || cut.start >= s.end) return [s];
+    const parts: Slot[] = [];
+    if (cut.start > s.start) parts.push({ start: s.start, end: cut.start });
+    if (cut.end < s.end) parts.push({ start: cut.end, end: s.end });
+    return parts;
+  });
+}
+
+const overlaps = (a: Slot, b: Slot) => a.start < b.end && a.end > b.start;
+
 /**
  * Ordem de gravação dentro do dia: conteúdos fixados e urgentes primeiro,
  * depois agrupados por formato e categoria (mesmo cenário/preparação).
@@ -215,7 +230,7 @@ function layout(drafts: Draft[], slots: Slot[]): PlannedItem[] | null {
     const dur = d.content.estimated_minutes;
     const slot = free.find((s) => s.end - s.start >= dur);
     if (!slot) return null;
-    out.push({ ...d, start: slot.start, end: slot.start + dur });
+    out.push({ ...d, start: slot.start, end: slot.start + dur, fixedTime: false });
     slot.start += dur;
   }
   return out;
@@ -225,7 +240,7 @@ function layout(drafts: Draft[], slots: Slot[]): PlannedItem[] | null {
  * Como `layout`, mas o que não couber na janela vai para logo depois dela,
  * sem nunca cair em cima de um compromisso.
  */
-function forceLayout(drafts: Draft[], slots: Slot[], busy: Occurrence[]): PlannedItem[] {
+function forceLayout(drafts: Draft[], slots: Slot[], busy: Slot[]): PlannedItem[] {
   const free = slots.map((s) => ({ ...s }));
   const out: PlannedItem[] = [];
   let cursor = slots.length ? slots[slots.length - 1].end : 9 * 60;
@@ -233,19 +248,19 @@ function forceLayout(drafts: Draft[], slots: Slot[], busy: Occurrence[]): Planne
     const dur = d.content.estimated_minutes;
     const slot = free.find((s) => s.end - s.start >= dur);
     if (slot) {
-      out.push({ ...d, start: slot.start, end: slot.start + dur });
+      out.push({ ...d, start: slot.start, end: slot.start + dur, fixedTime: false });
       slot.start += dur;
       continue;
     }
     cursor = nextFreeStart(cursor, dur, busy);
-    out.push({ ...d, start: cursor, end: cursor + dur });
+    out.push({ ...d, start: cursor, end: cursor + dur, fixedTime: false });
     cursor += dur;
   }
   return out.sort((a, b) => a.start - b.start);
 }
 
 /** Primeiro horário a partir de `from` em que `dur` minutos não colidem com compromissos. */
-export function nextFreeStart(from: number, dur: number, busy: Occurrence[]): number {
+export function nextFreeStart(from: number, dur: number, busy: Slot[]): number {
   let start = from;
   for (const b of [...busy].sort((x, y) => x.start - y.start)) {
     if (b.start < start + dur && b.end > start) start = b.end;
@@ -255,15 +270,18 @@ export function nextFreeStart(from: number, dur: number, busy: Occurrence[]): nu
 
 export function buildPlan({ today, contents, events, windows, horizonDays = 42 }: PlanInput): Plan {
   const dates = range(today, horizonDays);
-  const days = new Map<ISODate, { busy: Occurrence[]; slots: Slot[]; drafts: Draft[] }>();
+  // slots = janela menos compromissos; free = slots menos gravações com horário fixo.
+  type Day = { busy: Occurrence[]; slots: Slot[]; free: Slot[]; fixed: PlannedItem[]; drafts: Draft[] };
+  const days = new Map<ISODate, Day>();
   for (const date of dates) {
     const busy = eventsOn(events, date);
-    days.set(date, { busy, slots: freeSlots(windows, busy, date), drafts: [] });
+    const slots = freeSlots(windows, busy, date);
+    days.set(date, { busy, slots, free: slots, fixed: [], drafts: [] });
   }
   const order = batchOrder(today);
   const fits = (date: ISODate, extra: Draft) => {
     const d = days.get(date)!;
-    return layout([...d.drafts, extra].sort(order), d.slots) !== null;
+    return layout([...d.drafts, extra].sort(order), d.free) !== null;
   };
 
   const alerts: PlanAlert[] = [];
@@ -278,7 +296,24 @@ export function buildPlan({ today, contents, events, windows, horizonDays = 42 }
       continue;
     }
     const deadline = recordingDeadline(c);
-    day.drafts.push({ content: c, pinned: true, late: !!deadline && c.recording_date! > deadline });
+    const draft: Draft = { content: c, pinned: true, late: !!deadline && c.recording_date! > deadline };
+    if (!c.recording_time) {
+      day.drafts.push(draft);
+      continue;
+    }
+    // Data e horário fixados: o intervalo sai das janelas livres.
+    const start = toMinutes(c.recording_time);
+    const item: PlannedItem = { ...draft, start, end: start + c.estimated_minutes, fixedTime: true };
+    const clash = day.busy.find((b) => overlaps(b, item)) ?? day.fixed.find((f) => overlaps(f, item));
+    if (clash) {
+      alerts.push({
+        kind: "conflito",
+        content: c,
+        message: `A gravação fixada bate com "${"event" in clash ? clash.event.title : clash.content.title}".`,
+      });
+    }
+    day.fixed.push(item);
+    day.free = subtract(day.free, item);
   }
 
   // 2. Os demais, do mais urgente para o menos urgente.
@@ -328,10 +363,10 @@ export function buildPlan({ today, contents, events, windows, horizonDays = 42 }
   const result: DayPlan[] = dates.map((date) => {
     const d = days.get(date)!;
     const sorted = [...d.drafts].sort(order);
-    let items = layout(sorted, d.slots);
-    if (!items) {
-      items = forceLayout(sorted, d.slots, d.busy);
-      for (const it of items.filter((i) => i.pinned)) {
+    let flexible = layout(sorted, d.free);
+    if (!flexible) {
+      flexible = forceLayout(sorted, d.free, [...d.busy, ...d.fixed]);
+      for (const it of flexible.filter((i) => i.pinned)) {
         alerts.push({
           kind: "excede-janela",
           content: it.content,
@@ -339,6 +374,7 @@ export function buildPlan({ today, contents, events, windows, horizonDays = 42 }
         });
       }
     }
+    const items = [...d.fixed, ...flexible].sort((a, b) => a.start - b.start);
     for (const item of items) {
       byContent.set(item.content.id, { date, item });
       if (item.late) {

@@ -4,11 +4,12 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/data";
-import { formatClock, formatShort } from "@/lib/dates";
-import { findConflict } from "@/lib/planner";
+import { formatClock, formatShort, fromMinutes, toMinutes } from "@/lib/dates";
+import { eventsOn, findConflict, nextFreeStart } from "@/lib/planner";
 import { createClient } from "@/lib/supabase/server";
 import {
   DEFAULT_MINUTES,
+  NEEDS_RECORDING,
   FORMATS,
   PRIORITIES,
   RECURRENCES,
@@ -114,6 +115,7 @@ type ContentPatch = Partial<
     | "category"
     | "publication_date"
     | "recording_date"
+    | "recording_time"
     | "estimated_minutes"
   >
 >;
@@ -132,6 +134,8 @@ export async function updateContent(id: string, patch: ContentPatch) {
   for (const k of ["publication_date", "recording_date"] as const) {
     if (k in patch) clean[k] = isDate(patch[k]) ? patch[k] : null;
   }
+  // Trocar o dia de gravação por aqui devolve o horário ao planejador.
+  if ("recording_date" in patch) clean.recording_time = null;
   if (typeof patch.estimated_minutes === "number") {
     clean.estimated_minutes = Math.min(600, Math.max(5, Math.round(patch.estimated_minutes)));
   }
@@ -140,6 +144,97 @@ export async function updateContent(id: string, patch: ContentPatch) {
   const { supabase } = await getSession();
   const { error } = await supabase.from("contents").update(clean).eq("id", id);
   if (error) return { error: "Não foi possível salvar." };
+  refreshAll();
+}
+
+export type MoveResult = { error?: string; adjusted?: { start: number; after: string } } | undefined;
+
+const isMinute = (m: number) => Number.isInteger(m) && m >= 0 && m < 24 * 60;
+
+/**
+ * Fixa dia e horário de uma gravação (arrastar no calendário). Se o horário
+ * escolhido estiver ocupado, vai para o próximo horário livre do mesmo dia.
+ */
+export async function moveRecording(id: string, date: string, start: number): Promise<MoveResult> {
+  if (!isDate(date) || !isMinute(start)) return { error: "Horário inválido." };
+  const { supabase } = await getSession();
+  const [{ data: content }, { data: events }, { data: sameDay }] = await Promise.all([
+    supabase.from("contents").select("estimated_minutes").eq("id", id).single(),
+    supabase.from("personal_events").select("*"),
+    supabase
+      .from("contents")
+      .select("id, title, recording_time, estimated_minutes")
+      .eq("recording_date", date)
+      .not("recording_time", "is", null)
+      .in("status", NEEDS_RECORDING)
+      .neq("id", id),
+  ]);
+  if (!content) return { error: "Conteúdo não encontrado." };
+
+  // Ocupado = compromissos do dia + outras gravações com horário fixado.
+  const busy = [
+    ...eventsOn((events ?? []) as PersonalEvent[], date).map((o) => ({ ...o, title: o.event.title })),
+    ...(sameDay ?? []).map((c) => {
+      const s = toMinutes(c.recording_time!);
+      return { start: s, end: s + c.estimated_minutes, title: c.title };
+    }),
+  ];
+  const duration = content.estimated_minutes;
+  const free = nextFreeStart(start, duration, busy);
+  if (free + duration > 24 * 60) {
+    return { error: "Não há horário livre depois disso nesse dia. Tente outro dia." };
+  }
+
+  const { error } = await supabase
+    .from("contents")
+    .update({ recording_date: date, recording_time: fromMinutes(free) })
+    .eq("id", id);
+  if (error) return { error: "Não foi possível mover a gravação." };
+  refreshAll();
+
+  if (free !== start) {
+    // O último bloco que empurrou a gravação, para explicar o ajuste.
+    const blocker = busy.filter((b) => b.end <= free).sort((x, y) => y.end - x.end)[0];
+    return { adjusted: { start: free, after: blocker?.title ?? "" } };
+  }
+}
+
+/** Move um compromisso para outro dia/horário, mantendo a duração. */
+export async function moveEvent(id: string, fromDate: string, toDate: string, start: number): Promise<MoveResult> {
+  if (!isDate(fromDate) || !isDate(toDate) || !isMinute(start)) return { error: "Horário inválido." };
+  const { supabase } = await getSession();
+  const { data: all } = await supabase.from("personal_events").select("*");
+  const events = (all ?? []) as PersonalEvent[];
+  const event = events.find((e) => e.id === id);
+  if (!event) return { error: "Compromisso não encontrado." };
+
+  const duration = toMinutes(event.end_time) - toMinutes(event.start_time);
+  if (start + duration > 24 * 60) return { error: "O compromisso passaria da meia-noite." };
+
+  const recurring = event.recurrence !== "nenhuma";
+  if (recurring && fromDate !== toDate) {
+    return { error: "Compromisso que se repete: aqui dá para mudar só o horário. Para mudar os dias, edite na Agenda." };
+  }
+
+  const moved: PersonalEvent = {
+    ...event,
+    date: recurring ? event.date : toDate,
+    start_time: fromMinutes(start),
+    end_time: fromMinutes(start + duration),
+  };
+  const conflict = findConflict(moved, events);
+  if (conflict) {
+    const o = conflict.other;
+    return {
+      error: `Esse horário está ocupado por "${o.event.title}" (${formatClock(o.start)}–${formatClock(o.end)}) em ${formatShort(conflict.date)}.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from("personal_events")
+    .update({ date: moved.date, start_time: moved.start_time, end_time: moved.end_time })
+    .eq("id", id);
+  if (error) return { error: "Não foi possível mover o compromisso." };
   refreshAll();
 }
 

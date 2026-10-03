@@ -92,6 +92,8 @@ export type Content = {
   category: string | null;
   publication_date: string | null;
   recording_date: string | null;
+  /** Horário fixado ("HH:MM[:SS]"); só vale junto com recording_date. */
+  recording_time: string | null;
   estimated_minutes: number;
   created_at: string;
   updated_at: string;

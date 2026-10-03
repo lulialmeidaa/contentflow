@@ -1,26 +1,24 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Clapperboard, Send } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { PageHeader, cx } from "@/components/ui";
 import { getContents, getEvents, getPlan, getProfile, getToday } from "@/lib/data";
 import {
   addDays,
   addMonths,
   daysInMonth,
-  formatClock,
-  formatDuration,
   formatShort,
   monthName,
   range,
   startOfMonth,
   startOfWeek,
   weekday,
-  weekdayName,
-  weekdayShort,
   type ISODate,
 } from "@/lib/dates";
-import { FORMAT_LABEL, type Content } from "@/lib/domain";
+import type { Content } from "@/lib/domain";
 import { eventsOn, freeSlots, type DayPlan } from "@/lib/planner";
+import { MonthGrid, type MonthEntry } from "./month-grid";
+import { WeekGrid, type GridItem } from "./week-grid";
 
 export const metadata: Metadata = { title: "Calendário" };
 
@@ -106,9 +104,9 @@ export default async function CalendarPage(props: PageProps<"/calendario">) {
       </div>
 
       {view === "mes" ? (
-        <MonthGrid start={start} today={today} info={dayInfo} />
+        <MonthView start={start} today={today} info={dayInfo} />
       ) : (
-        <WeekList days={range(start, 7).map(dayInfo)} today={today} />
+        <WeekView days={range(start, 7).map(dayInfo)} today={today} />
       )}
     </>
   );
@@ -126,163 +124,111 @@ function Legend() {
   return (
     <div className="hidden items-center gap-4 text-xs text-muted sm:flex">
       <span className="flex items-center gap-1.5">
-        <span className="size-2 rounded-full bg-rose" /> Gravação
+        <span className="size-2.5 rounded-sm bg-rose-soft ring-1 ring-rose/40" /> Gravação
       </span>
       <span className="flex items-center gap-1.5">
-        <span className="size-2 rounded-full bg-ink" /> Publicação
+        <span className="size-2.5 rounded-sm bg-ink" /> Publicação
       </span>
       <span className="flex items-center gap-1.5">
-        <span className="size-2 rounded-full bg-line" /> Compromisso
+        <span className="size-2.5 rounded-sm bg-paper ring-1 ring-ink/30" /> Compromisso
       </span>
     </div>
   );
 }
 
-function MonthGrid({ start, today, info }: { start: ISODate; today: ISODate; info: (d: ISODate) => Info }) {
+function MonthView({ start, today, info }: { start: ISODate; today: ISODate; info: (d: ISODate) => Info }) {
   const lead = (weekday(start) + 6) % 7; // semana começa na segunda
   const total = Math.ceil((lead + daysInMonth(start)) / 7) * 7;
-  const cells = range(addDays(start, -lead), total);
+  const dates = range(addDays(start, -lead), total);
   const month = start.slice(0, 7);
 
+  const entries: MonthEntry[] = [];
+  for (const date of dates) {
+    const d = info(date);
+    for (const c of d.publications) {
+      entries.push({ kind: "publicacao", id: c.id, date, start: 0, end: 0, title: c.title, format: c.format });
+    }
+    for (const o of d.busy) {
+      entries.push({
+        kind: "compromisso",
+        id: o.event.id,
+        date,
+        start: o.start,
+        end: o.end,
+        title: o.event.title,
+        recurring: o.event.recurrence !== "nenhuma",
+      });
+    }
+    for (const it of d.planned?.items ?? []) {
+      entries.push({
+        kind: "gravacao",
+        id: it.content.id,
+        date,
+        start: it.start,
+        end: it.end,
+        title: it.content.title,
+        format: it.content.format,
+        pinned: it.fixedTime,
+      });
+    }
+  }
+
   return (
-    <div className="card overflow-hidden">
-      <div className="grid grid-cols-7 border-b border-line text-center text-[11px] font-medium text-muted uppercase">
-        {[1, 2, 3, 4, 5, 6, 0].map((w) => (
-          <div key={w} className={cx("py-2", w === 6 && "text-rose-deep")}>
-            {weekdayShort(w)}
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-7">
-        {cells.map((date) => {
-          const d = info(date);
-          const rec = d.planned?.items ?? [];
-          const inMonth = date.startsWith(month);
-          return (
-            <Link
-              key={date}
-              href={`?view=semana&d=${date}`}
-              className={cx(
-                "flex min-h-16 flex-col gap-1 border-r border-b border-line p-1.5 text-left transition hover:bg-rose-wash md:min-h-28 md:p-2 [&:nth-child(7n)]:border-r-0",
-                !inMonth && "bg-mist/60 text-muted/60",
-              )}
-            >
-              <span
-                className={cx(
-                  "flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
-                  date === today && "bg-ink font-semibold text-paper",
-                )}
-              >
-                {Number(date.slice(8))}
-              </span>
-              {/* Celular: pontos. Desktop: rótulos. */}
-              <span className="flex flex-wrap gap-0.5 md:hidden">
-                {rec.length > 0 && <span className="size-1.5 rounded-full bg-rose" />}
-                {d.publications.length > 0 && <span className="size-1.5 rounded-full bg-ink" />}
-                {d.busy.length > 0 && <span className="size-1.5 rounded-full bg-line" />}
-              </span>
-              <span className="hidden flex-col gap-0.5 text-[11px] leading-tight md:flex">
-                {rec.length > 0 && (
-                  <span className="truncate rounded bg-rose-soft px-1.5 py-0.5 font-medium text-rose-deep">
-                    {rec.length >= 3 ? "Lote" : "Gravar"} · {rec.length}
-                  </span>
-                )}
-                {d.publications.slice(0, 2).map((c) => (
-                  <span key={c.id} className="truncate rounded bg-ink px-1.5 py-0.5 text-paper">
-                    {FORMAT_LABEL[c.format]} · {c.title}
-                  </span>
-                ))}
-                {d.publications.length > 2 && <span className="text-muted">+{d.publications.length - 2}</span>}
-                {d.busy.slice(0, 2).map((o) => (
-                  <span key={o.event.id} className="truncate text-muted">
-                    {formatClock(o.start)} {o.event.title}
-                  </span>
-                ))}
-                {d.busy.length > 2 && <span className="text-muted">+{d.busy.length - 2}</span>}
-              </span>
-            </Link>
-          );
-        })}
-      </div>
-    </div>
+    <MonthGrid
+      key={start}
+      cells={dates.map((date) => ({ date, inMonth: date.startsWith(month) }))}
+      entries={entries}
+      today={today}
+    />
   );
 }
 
-function WeekList({ days, today }: { days: Info[]; today: ISODate }) {
+function WeekView({ days, today }: { days: Info[]; today: ISODate }) {
+  const items: GridItem[] = [];
+  for (const d of days) {
+    for (const o of d.busy) {
+      items.push({
+        kind: "compromisso",
+        id: o.event.id,
+        date: d.date,
+        start: o.start,
+        end: o.end,
+        title: o.event.title,
+        recurring: o.event.recurrence !== "nenhuma",
+      });
+    }
+    for (const it of d.planned?.items ?? []) {
+      items.push({
+        kind: "gravacao",
+        id: it.content.id,
+        date: d.date,
+        start: it.start,
+        end: it.end,
+        title: it.content.title,
+        format: it.content.format,
+        pinned: it.fixedTime,
+      });
+    }
+  }
+
+  // Faixa de horas visível: cobre janelas, compromissos e gravações da semana.
+  const starts = [8 * 60, ...items.map((i) => i.start), ...days.flatMap((d) => d.slots.map((s) => s.start))];
+  const ends = [20 * 60, ...items.map((i) => i.end), ...days.flatMap((d) => d.slots.map((s) => s.end))];
+  const startHour = Math.max(0, Math.floor(Math.min(...starts) / 60) - 1);
+  const endHour = Math.min(24, Math.ceil(Math.max(...ends) / 60) + 1);
+
   return (
-    <div className="grid gap-3 lg:grid-cols-7 lg:gap-2">
-      {days.map((d) => {
-        const rec = d.planned?.items ?? [];
-        const isWeekend = [0, 6].includes(weekday(d.date));
-        const free = d.slots.reduce((s, x) => s + x.end - x.start, 0);
-        return (
-          <div
-            key={d.date}
-            className={cx(
-              "card flex flex-col gap-2.5 p-3.5 lg:min-h-72",
-              d.date === today && "ring-1 ring-ink",
-              rec.length >= 3 && "border-rose/40 bg-rose-wash",
-            )}
-          >
-            <p className="flex items-baseline justify-between">
-              <span className={cx("text-sm font-semibold capitalize", isWeekend && "text-rose-deep")}>
-                {weekdayName(d.date)}
-              </span>
-              <span className="text-xs text-muted tabular-nums">{formatShort(d.date)}</span>
-            </p>
-
-            {d.busy.map((o) => (
-              <p key={o.event.id} className="text-xs text-ink-soft">
-                <span className="text-muted tabular-nums">{formatClock(o.start)}</span> — {o.event.title}
-              </p>
-            ))}
-
-            {rec.length > 0 ? (
-              <div className="flex flex-col gap-1.5">
-                <p className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-rose-deep uppercase">
-                  <Clapperboard size={13} />
-                  {rec.length >= 3 ? "Gravação em lote" : "Gravar"}
-                </p>
-                {rec.map((it) => (
-                  <Link
-                    key={it.content.id}
-                    href={`/conteudos/${it.content.id}`}
-                    className="rounded-lg bg-paper px-2.5 py-1.5 text-xs ring-1 ring-line hover:ring-rose"
-                  >
-                    <span className="block text-muted tabular-nums">
-                      {formatClock(it.start)}–{formatClock(it.end)} · {FORMAT_LABEL[it.content.format]}
-                    </span>
-                    <span className="line-clamp-2 font-medium">{it.content.title}</span>
-                  </Link>
-                ))}
-                <p className="text-[11px] text-muted">
-                  {formatDuration(d.planned!.usedMinutes)} de {formatDuration(d.planned!.availableMinutes)}
-                </p>
-              </div>
-            ) : d.date >= today && free > 0 ? (
-              <p className="text-xs text-muted">
-                Janela livre{" "}
-                {d.slots.map((s) => `${formatClock(s.start)}–${formatClock(s.end)}`).join(", ")}
-              </p>
-            ) : (
-              <p className="text-xs text-muted/70">Sem gravação</p>
-            )}
-
-            {d.publications.map((c) => (
-              <Link
-                key={c.id}
-                href={`/conteudos/${c.id}`}
-                className="mt-auto flex items-center gap-1.5 rounded-lg bg-ink px-2.5 py-1.5 text-xs text-paper"
-              >
-                <Send size={12} className="shrink-0 text-rose-soft" />
-                <span className="truncate">
-                  {FORMAT_LABEL[c.format]} · {c.title}
-                </span>
-              </Link>
-            ))}
-          </div>
-        );
-      })}
-    </div>
+    <WeekGrid
+      key={days[0].date}
+      days={days.map((d) => ({
+        date: d.date,
+        slots: d.date >= today ? d.slots : [],
+        publications: d.publications.map((c) => ({ id: c.id, title: c.title, format: c.format })),
+      }))}
+      items={items}
+      today={today}
+      startHour={startHour}
+      endHour={endHour}
+    />
   );
 }
