@@ -1,4 +1,4 @@
-# Projeto isolado: não compartilha nada com os outros serviços da VPS.
+# Projeto isolado: não altera nenhum outro serviço da VPS.
 name: contentflow
 
 services:
@@ -10,8 +10,18 @@ services:
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
     container_name: contentflow
     env_file: .env
-    # Só acessível de dentro da VPS; o Cloudflare Tunnel publica o domínio.
+    # Acesso local para testes (curl na própria VPS).
     ports:
       - "127.0.0.1:${CONTENTFLOW_PORT:-3100}:3000"
+    # Entra na rede do Cloudflare Tunnel já existente, que publica
+    # contentflow.necohouse.com.br → http://contentflow:3000
+    networks:
+      - default
+      - tunnel
     restart: unless-stopped
     mem_limit: 512m
+
+networks:
+  tunnel:
+    external: true
+    name: ${TUNNEL_NETWORK:-financas_default}
